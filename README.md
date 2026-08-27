@@ -1,5 +1,5 @@
 # Ret-apo "Europo: aerpremo" kaj Android-apo "Europo ‒ aerpremo"
-Tio chi estas la Guglo-Apoj-Skripto-pakajho por la supre menciitaj apoj. Ili apoj montras la aerpremon super Europo.
+Tio chi estas la Guglo-Apoj-Skripto-pakajho por la supre menciitaj apoj. Ili montras la aerpremon super Europo.
 Chi-cele la API de Open-Meteo estas uzata.
 
 ## Permesilo ("License")
