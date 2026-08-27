@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  >
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 12px;
+      background: #f5f7fa;
+      color: #111;
+    }
+
+    h1 {
+      margin-bottom: 4px;
+    }
+
+    #status {
+      margin: 10px 0;
+      font-weight: bold;
+    }
+
+    #leafletMap {
+      height: 82vh;
+      min-height: 720px;
+      width: calc(100vw - 24px);
+      box-sizing: border-box;
+      border: 1px solid #999;
+      border-radius: 6px;
+      background: white;
+      margin-top: 10px;
+    }
+
+    #mapNote {
+      width: calc(100vw - 24px);
+      font-size: 13px;
+      color: #444;
+      margin-top: 6px;
+    }
+
+    .hint {
+      font-size: 13px;
+      color: #444;
+      max-width: 1100px;
+    }
+
+    .meta {
+      margin: 8px 0 12px 0;
+      font-size: 14px;
+    }
+
+    .isobar-label {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      padding: 0;
+      color: #111;
+      font-size: 19px;
+      font-weight: bold;
+      line-height: 21px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .pressure-system-label {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      padding: 0;
+      font-size: 24px;
+      font-weight: bold;
+      line-height: 26px;
+      white-space: nowrap;
+      pointer-events: none;
+      text-align: center;
+      text-shadow:
+        -2px -2px 0 #ffffff,
+         2px -2px 0 #ffffff,
+        -2px  2px 0 #ffffff,
+         2px  2px 0 #ffffff,
+         0   -2px 0 #ffffff,
+         0    2px 0 #ffffff,
+        -2px  0   0 #ffffff,
+         2px  0   0 #ffffff;
+    }
+
+    .pressure-system-label.high {
+      color: #0057c2;
+    }
+
+    .pressure-system-label.low {
+      color: #c00000;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Europo: aerpremo</h1>
+
+  <div class="hint">
+    La izobaroj estas kalkulitaj el la ekzistanta kruda 2,5-grada krado de aerpremaj valoroj che marnivelo en hPa.
+    Por pli glata grafika aspekto ili estas nur bilde interpolitaj en la retumilo, do ne uzighas aldonaj datumoj.
+    La datumoj estas automate preparataj proksimume chiun duan horon. Signifas &quot;A&quot; alton kaj &quot;M&quot; malalton.
+  </div>
+
+  <div id="status">Shargante preparitajn datumojn ...</div>
+  <div id="meta" class="meta"></div>
+
+  <div id="leafletMap"></div>
+  <div id="mapNote"></div>
+  <div id="footer"></div>
+
+  <script>
+    const ISOBAR_INTERVAL_HPA = 4;
+    const ISOBAR_RENDER_FACTOR = 5;
+
+    const DISPLAY_DOMAIN = {
+      latMin: 35.0,
+      latMax: 72.5,
+      lonMin: -25.0,
+      lonMax: 32.5,
+      step: 2.5
+    };
+
+    let leafletMap = null;
+    let isobarsLayer = null;
+    let labelsLayer = null;
+    let systemsLayer = null;
+    let maskLayer = null;
+
+
+    function loadData() {
+      document.getElementById('status').textContent = 'Shargante preparitajn datumojn ...';
+
+      google.script.run
+        .withSuccessHandler(function(data) {
+          document.getElementById('status').textContent = 'Preta.';
+          render(data);
+        })
+        .withFailureHandler(function(err) {
+          document.getElementById('status').textContent =
+            'Eraro: ' + (err && err.message ? err.message : err);
+        })
+        .getPressureMapData();
+    }
+
+
+    function render(data) {
+      const preparedAt = data.preparedAt || data.generatedAt || '';
+
+      document.getElementById('meta').innerHTML =
+        '<b>Datumoj preparitaj:</b> ' + escapeHtml(preparedAt) +
+        ' &nbsp; <b>Fonto:</b> API de Open-Meteo' +
+        ' &nbsp; <b>API-petoj por preparo:</b> ch. ' + data.apiRequestCount +
+        ' &nbsp; <b>Punktoj entute:</b> ' + data.stats.count +
+        ' &nbsp; <b>Minimumo / mezo / maksimumo:</b> ' +
+        data.stats.minPressure + ' / ' +
+        data.stats.meanPressure + ' / ' +
+        data.stats.maxPressure + ' hPa';
+
+      renderLeafletMap(data);
+      document.getElementById('footer').innerHTML = renderFooter();
+    }
+
+
+    function initLeafletMap() {
+      if (leafletMap) return;
+
+      leafletMap = L.map('leafletMap', {
+        preferCanvas: false,
+        worldCopyJump: false,
+        maxBoundsViscosity: 1.0,
+        zoomSnap: 0.1,
+        zoomDelta: 0.25
+      }).setView([55, 4], 4);
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 9,
+        noWrap: true,
+        bounds: [[-85, -180], [85, 180]],
+        attribution: '&copy; OpenStreetMap-Mitwirkende'
+      }).addTo(leafletMap);
+
+      leafletMap.createPane('isobarsPane');
+      leafletMap.getPane('isobarsPane').style.zIndex = 450;
+
+      leafletMap.createPane('isobarLabelsPane');
+      leafletMap.getPane('isobarLabelsPane').style.zIndex = 460;
+
+      leafletMap.createPane('maskPane');
+      leafletMap.getPane('maskPane').style.zIndex = 470;
+
+      leafletMap.createPane('pressureSystemsPane');
+      leafletMap.getPane('pressureSystemsPane').style.zIndex = 480;
+
+      isobarsLayer = L.layerGroup().addTo(leafletMap);
+      labelsLayer = L.layerGroup().addTo(leafletMap);
+      systemsLayer = L.layerGroup().addTo(leafletMap);
+      maskLayer = L.layerGroup().addTo(leafletMap);
+    }
+
+
+    function renderLeafletMap(data) {
+      initLeafletMap();
+
+      isobarsLayer.clearLayers();
+      labelsLayer.clearLayers();
+      systemsLayer.clearLayers();
+      maskLayer.clearLayers();
+
+      const domain = makeDisplayDomain();
+
+      const bounds = L.latLngBounds(
+        [domain.latMin, domain.lonMin],
+        [domain.latMax, domain.lonMax]
+      );
+
+      leafletMap.setMaxBounds(bounds.pad(0.06));
+
+      leafletMap.fitBounds(bounds, {
+        padding: [0, 0],
+        animate: false
+      });
+
+      const matrixResult = buildDisplayPressureMatrix(data, domain);
+      const originalMatrix = matrixResult.matrix;
+      const pressureStats = calcMatrixStats(originalMatrix);
+
+      if (!pressureStats) {
+        document.getElementById('mapNote').textContent =
+          'Keine Luftdruckwerte im angezeigten Ausschnitt gefunden. ' +
+          'Pruefe, ob Code.gs ebenfalls lonMin: -25.0 und lonMax: 32.5 verwendet.';
+        addOutsideAreaMask(domain);
+        return;
+      }
+
+      const interpolated = interpolatePressureMatrix(
+        originalMatrix,
+        domain,
+        ISOBAR_RENDER_FACTOR
+      );
+
+      const isobarMatrix = interpolated.matrix;
+      const isobarDomain = interpolated.domain;
+
+      const thresholds = buildIsobarThresholds(
+        pressureStats.min,
+        pressureStats.max,
+        ISOBAR_INTERVAL_HPA
+      );
+
+      let totalSegments = 0;
+
+      thresholds.forEach(function(value) {
+        const segments = marchingSquaresSegments(isobarMatrix, isobarDomain, value);
+
+        if (!segments.length) return;
+
+        totalSegments += segments.length;
+
+        const major = isMajorIsobar(value, ISOBAR_INTERVAL_HPA);
+
+        const line = L.polyline(segments, {
+          pane: 'isobarsPane',
+          color: '#202020',
+          weight: major ? 2.2 : 1.45,
+          opacity: major ? 0.88 : 0.72,
+          dashArray: major ? '10 10' : '5 9',
+          dashOffset: '0',
+          lineCap: 'round',
+          lineJoin: 'round',
+          smoothFactor: 0
+        });
+
+        line.bindTooltip(formatIsobarValue(value) + ' hPa', {
+          sticky: true
+        });
+
+        line.addTo(isobarsLayer);
+
+        addIsobarLabel(value, segments, domain);
+      });
+
+      addOutsideAreaMask(domain);
+      addPressureSystemLabels(data.systems, domain);
+
+      document.getElementById('mapNote').textContent =
+        'Mapa ekstrakto: latitudo: ' +
+        domain.latMin + '° ghis ' + domain.latMax + '°; longitudo: ' +
+        domain.lonMin + '° ghis ' + domain.lonMax + '°. ' +
+        'Veraj aerpremvaloroj en ekstrakto: ' + matrixResult.count + '. ' +
+        'Aerpremo: minimumo / maximumo: ' +
+        round1(pressureStats.min) + ' / ' + round1(pressureStats.max) + ' hPa. ' +
+        'Izobara distanco: ' + ISOBAR_INTERVAL_HPA + ' hPa. ' +
+        'API-krado: ' + domain.step + '°. ' +
+        'Grafika izobara intera rastrumo: ch. ' +
+        round2(isobarDomain.step) + '° ' +
+        '(Faktoro ' + ISOBAR_RENDER_FACTOR + ', sen aldonaj petoj al API). ' +
+        'Desegnitaj izobaraj segmentoj: ' + totalSegments + '.';
+
+      setTimeout(function() {
+        leafletMap.invalidateSize();
+        leafletMap.fitBounds(bounds, {
+          padding: [0, 0],
+          animate: false
+        });
+      }, 0);
+    }
+
+
+    function makeDisplayDomain() {
+      const step = DISPLAY_DOMAIN.step;
+
+      const nRows =
+        Math.round((DISPLAY_DOMAIN.latMax - DISPLAY_DOMAIN.latMin) / step) + 1;
+
+      const nCols =
+        Math.round((DISPLAY_DOMAIN.lonMax - DISPLAY_DOMAIN.lonMin) / step) + 1;
+
+      return {
+        latMin: DISPLAY_DOMAIN.latMin,
+        latMax: DISPLAY_DOMAIN.latMax,
+        lonMin: DISPLAY_DOMAIN.lonMin,
+        lonMax: DISPLAY_DOMAIN.lonMax,
+        step: step,
+        nRows: nRows,
+        nCols: nCols
+      };
+    }
+
+
+    function buildDisplayPressureMatrix(data, domain) {
+      const matrix = [];
+
+      for (let r = 0; r < domain.nRows; r++) {
+        matrix.push(new Array(domain.nCols).fill(null));
+      }
+
+      let count = 0;
+
+      data.points.forEach(function(p) {
+        const lat = Number(p.lat);
+        const lon = Number(p.lon);
+
+        if (
+          lat < domain.latMin - 0.0001 ||
+          lat > domain.latMax + 0.0001 ||
+          lon < domain.lonMin - 0.0001 ||
+          lon > domain.lonMax + 0.0001
+        ) {
+          return;
+        }
+
+        const r = Math.round((domain.latMax - lat) / domain.step);
+        const c = Math.round((lon - domain.lonMin) / domain.step);
+
+        if (
+          r >= 0 &&
+          r < domain.nRows &&
+          c >= 0 &&
+          c < domain.nCols
+        ) {
+          matrix[r][c] = Number(p.pressure);
+          count++;
+        }
+      });
+
+      return {
+        matrix: matrix,
+        count: count
+      };
+    }
+
+
+    function interpolatePressureMatrix(matrix, domain, factor) {
+      factor = Math.max(1, Math.round(Number(factor) || 1));
+
+      if (factor === 1) {
+        return {
+          matrix: matrix,
+          domain: domain
+        };
+      }
+
+      const oldRows = domain.nRows;
+      const oldCols = domain.nCols;
+
+      const newRows = (oldRows - 1) * factor + 1;
+      const newCols = (oldCols - 1) * factor + 1;
+
+      const newMatrix = [];
+
+      for (let r = 0; r < newRows; r++) {
+        const row = [];
+
+        const srcR = r / factor;
+        const r0 = Math.floor(srcR);
+        const r1 = Math.min(r0 + 1, oldRows - 1);
+        const fy = srcR - r0;
+
+        for (let c = 0; c < newCols; c++) {
+          const srcC = c / factor;
+          const c0 = Math.floor(srcC);
+          const c1 = Math.min(c0 + 1, oldCols - 1);
+          const fx = srcC - c0;
+
+          const v00 = matrix[r0][c0];
+          const v01 = matrix[r0][c1];
+          const v10 = matrix[r1][c0];
+          const v11 = matrix[r1][c1];
+
+          if (
+            !isFinite(v00) ||
+            !isFinite(v01) ||
+            !isFinite(v10) ||
+            !isFinite(v11)
+          ) {
+            row.push(null);
+            continue;
+          }
+
+          const vTop = v00 + (v01 - v00) * fx;
+          const vBottom = v10 + (v11 - v10) * fx;
+          const v = vTop + (vBottom - vTop) * fy;
+
+          row.push(v);
+        }
+
+        newMatrix.push(row);
+      }
+
+      return {
+        matrix: newMatrix,
+        domain: {
+          latMin: domain.latMin,
+          latMax: domain.latMax,
+          lonMin: domain.lonMin,
+          lonMax: domain.lonMax,
+          step: domain.step / factor,
+          nRows: newRows,
+          nCols: newCols
+        }
+      };
+    }
+
+
+    function calcMatrixStats(matrix) {
+      const vals = [];
+
+      matrix.forEach(function(row) {
+        row.forEach(function(v) {
+          if (isFinite(v)) vals.push(Number(v));
+        });
+      });
+
+      if (!vals.length) return null;
+
+      const min = Math.min.apply(null, vals);
+      const max = Math.max.apply(null, vals);
+      const mean = vals.reduce(function(a, b) {
+        return a + b;
+      }, 0) / vals.length;
+
+      return {
+        min: min,
+        max: max,
+        mean: mean,
+        count: vals.length
+      };
+    }
+
+
+    function addOutsideAreaMask(domain) {
+      const outer = [
+        [85, -180],
+        [85, 180],
+        [-85, 180],
+        [-85, -180]
+      ];
+
+      const inner = [
+        [domain.latMax, domain.lonMin],
+        [domain.latMax, domain.lonMax],
+        [domain.latMin, domain.lonMax],
+        [domain.latMin, domain.lonMin]
+      ];
+
+      L.polygon([outer, inner], {
+        pane: 'maskPane',
+        stroke: false,
+        fill: true,
+        fillColor: '#f5f7fa',
+        fillOpacity: 1,
+        fillRule: 'evenodd',
+        interactive: false
+      }).addTo(maskLayer);
+
+      L.rectangle(
+        [
+          [domain.latMin, domain.lonMin],
+          [domain.latMax, domain.lonMax]
+        ],
+        {
+          pane: 'maskPane',
+          color: '#888',
+          weight: 1,
+          opacity: 0.8,
+          fill: false,
+          interactive: false
+        }
+      ).addTo(maskLayer);
+    }
+
+
+    function addPressureSystemLabels(systems, domain) {
+      if (!systems) return;
+
+      if (Array.isArray(systems.highs)) {
+        systems.highs.forEach(function(system) {
+          addPressureSystemLabel(system, domain);
+        });
+      }
+
+      if (Array.isArray(systems.lows)) {
+        systems.lows.forEach(function(system) {
+          addPressureSystemLabel(system, domain);
+        });
+      }
+    }
+
+
+    function addPressureSystemLabel(system, domain) {
+      if (!system) return;
+
+      const lat = Number(system.lat);
+      const lon = Number(system.lon);
+
+      if (!isFinite(lat) || !isFinite(lon)) return;
+
+      if (
+        lat < domain.latMin ||
+        lat > domain.latMax ||
+        lon < domain.lonMin ||
+        lon > domain.lonMax
+      ) {
+        return;
+      }
+
+      const type = String(system.type || '').toUpperCase();
+      const isHigh = type === 'A';
+      const isLow = type === 'M';
+
+      if (!isHigh && !isLow) return;
+
+      const html = escapeHtml(type + ' ' + formatSystemPressure(system.pressure));
+
+      L.marker([lat, lon], {
+        pane: 'pressureSystemsPane',
+        interactive: false,
+        icon: L.divIcon({
+          className: 'pressure-system-label ' + (isHigh ? 'high' : 'low'),
+          html: html,
+          iconSize: [90, 30],
+          iconAnchor: [45, 15]
+        })
+      }).addTo(systemsLayer);
+    }
+
+
+    function formatSystemPressure(value) {
+      const n = Number(value);
+
+      if (!isFinite(n)) return '';
+
+      return String(Math.round(n));
+    }
+
+
+    function buildIsobarThresholds(minPressure, maxPressure, interval) {
+      const min = Number(minPressure);
+      const max = Number(maxPressure);
+
+      const first = Math.ceil(min / interval) * interval;
+      const last = Math.floor(max / interval) * interval;
+
+      const thresholds = [];
+
+      for (let value = first; value <= last; value += interval) {
+        if (value > min && value < max) {
+          thresholds.push(value);
+        }
+      }
+
+      if (!thresholds.length && max - min >= 1) {
+        thresholds.push(Math.round((min + max) / 2));
+      }
+
+      return thresholds;
+    }
+
+
+    function marchingSquaresSegments(matrix, domain, threshold) {
+      const segments = [];
+
+      const lookup = {
+        0: [],
+        1: [[3, 0]],
+        2: [[0, 1]],
+        3: [[3, 1]],
+        4: [[1, 2]],
+        5: [[3, 0], [1, 2]],
+        6: [[0, 2]],
+        7: [[3, 2]],
+        8: [[2, 3]],
+        9: [[0, 2]],
+        10: [[0, 1], [2, 3]],
+        11: [[1, 2]],
+        12: [[1, 3]],
+        13: [[0, 1]],
+        14: [[3, 0]],
+        15: []
+      };
+
+      for (let r = 0; r < domain.nRows - 1; r++) {
+        for (let c = 0; c < domain.nCols - 1; c++) {
+          const tl = matrix[r][c];
+          const tr = matrix[r][c + 1];
+          const br = matrix[r + 1][c + 1];
+          const bl = matrix[r + 1][c];
+
+          if (
+            !isFinite(tl) ||
+            !isFinite(tr) ||
+            !isFinite(br) ||
+            !isFinite(bl)
+          ) {
+            continue;
+          }
+
+          let index = 0;
+
+          if (tl >= threshold) index |= 1;
+          if (tr >= threshold) index |= 2;
+          if (br >= threshold) index |= 4;
+          if (bl >= threshold) index |= 8;
+
+          const pairs = lookup[index];
+
+          if (!pairs || !pairs.length) continue;
+
+          pairs.forEach(function(pair) {
+            const a = edgePoint(pair[0], r, c, tl, tr, br, bl, domain, threshold);
+            const b = edgePoint(pair[1], r, c, tl, tr, br, bl, domain, threshold);
+
+            if (!a || !b) return;
+
+            if (
+              Math.abs(a[0] - b[0]) < 0.000001 &&
+              Math.abs(a[1] - b[1]) < 0.000001
+            ) {
+              return;
+            }
+
+            segments.push([a, b]);
+          });
+        }
+      }
+
+      return segments;
+    }
+
+
+    function edgePoint(edge, r, c, tl, tr, br, bl, domain, threshold) {
+      const step = domain.step;
+
+      const latTop = domain.latMax - r * step;
+      const latBottom = domain.latMax - (r + 1) * step;
+      const lonLeft = domain.lonMin + c * step;
+      const lonRight = domain.lonMin + (c + 1) * step;
+
+      if (edge === 0) {
+        const k = interpolationFraction(tl, tr, threshold);
+        return [latTop, lonLeft + k * step];
+      }
+
+      if (edge === 1) {
+        const k = interpolationFraction(tr, br, threshold);
+        return [latTop - k * step, lonRight];
+      }
+
+      if (edge === 2) {
+        const k = interpolationFraction(bl, br, threshold);
+        return [latBottom, lonLeft + k * step];
+      }
+
+      if (edge === 3) {
+        const k = interpolationFraction(tl, bl, threshold);
+        return [latTop - k * step, lonLeft];
+      }
+
+      return null;
+    }
+
+
+    function interpolationFraction(v1, v2, threshold) {
+      const d = v2 - v1;
+
+      if (Math.abs(d) < 0.000001) {
+        return 0.5;
+      }
+
+      const k = (threshold - v1) / d;
+
+      if (k < 0) return 0;
+      if (k > 1) return 1;
+
+      return k;
+    }
+
+
+    function addIsobarLabel(value, segments, domain) {
+      if (!segments.length) return;
+
+      const centerLat = (domain.latMin + domain.latMax) / 2;
+      const centerLon = (domain.lonMin + domain.lonMax) / 2;
+
+      let best = null;
+      let bestScore = Infinity;
+
+      segments.forEach(function(seg) {
+        const a = seg[0];
+        const b = seg[1];
+
+        const midLat = (a[0] + b[0]) / 2;
+        const midLon = (a[1] + b[1]) / 2;
+
+        const score =
+          Math.pow(midLat - centerLat, 2) +
+          Math.pow((midLon - centerLon) * Math.cos(centerLat * Math.PI / 180), 2);
+
+        if (score < bestScore) {
+          bestScore = score;
+          best = [midLat, midLon];
+        }
+      });
+
+      if (!best) return;
+
+      L.marker(best, {
+        pane: 'isobarLabelsPane',
+        interactive: false,
+        icon: L.divIcon({
+          className: 'isobar-label',
+          html: formatIsobarValue(value),
+          iconSize: [36, 18],
+          iconAnchor: [18, 9]
+        })
+      }).addTo(labelsLayer);
+    }
+
+
+    function isMajorIsobar(value, interval) {
+      const majorInterval = interval * 2;
+      return Math.abs(value / majorInterval - Math.round(value / majorInterval)) < 0.0001;
+    }
+
+
+    function formatIsobarValue(value) {
+      if (Math.abs(value - Math.round(value)) < 0.001) {
+        return String(Math.round(value));
+      }
+
+      return Number(value).toFixed(1);
+    }
+
+
+    function renderFooter() {
+      return '<p class="hint">' +
+        'Jen tiu chi ret-apo, kiel Android-apo &quot;<a href="https://www.dropbox.com/scl/fi/a4olirho6pgw73wqgbox0/Europo___aerpremo_v1.0.0_1787832826684.apk?rlkey=3hmyys72k3jixjyeqxvp3nj73&st=kp9ja639&dl=0" target="_blank">Europo &ndash; aerpremo</a>&quot;.<br>' +
+        'Ghi estis kreita per AppMint disponigita de SmartrixLabs. Elshuto, instalo kaj uzo de la APK okazas je propra risko.<br>' +
+        'Jen Snapchat-lensoj &quot;<a href="https://www.snapchat.com/lens/052adfc26f8f4adbb4b56fd07804b7b0" target="_blank">Europo: aerpremo</a>&quot; kaj &quot;<a href="https://www.snapchat.com/lens/6d28e196ad734258a3c553c0b0f02d36" target="_blank">Norda Maro</a>&quot;.' +
+        '<br><br>' +
+        '<a href="https://jhau.de/privateco.html" target="_blank">Privateco</a>' +
+        '</p>';
+    }
+
+
+    function round1(x) {
+      return Math.round(Number(x) * 10) / 10;
+    }
+
+
+    function round2(x) {
+      return Math.round(Number(x) * 100) / 100;
+    }
+
+
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+
+    loadData();
+
+    setInterval(function() {
+      loadData();
+    }, 15 * 60 * 1000);
+  </script>
+</body>
+</html>
