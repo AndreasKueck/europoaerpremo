@@ -37,6 +37,7 @@
       border-radius: 6px;
       background: white;
       margin-top: 10px;
+      display: none;
     }
 
     #mapNote {
@@ -108,10 +109,11 @@
   <div class="hint">
     La izobaroj estas kalkulitaj el la ekzistanta kruda 2,5-grada krado de aerpremaj valoroj che marnivelo en hPa.
     Por pli glata grafika aspekto ili estas nur bilde interpolitaj en la retumilo, do ne uzighas aldonaj datumoj.
-    La datumoj estas automate preparataj proksimume chiun duan horon. Signifas &quot;A&quot; alton kaj &quot;M&quot; malalton.
+    &quot;A&quot;: alto; &quot;M&quot;: malalto.
   </div>
 
-  <div id="status">Shargante preparitajn datumojn ...</div>
+  <button id="loadButton" onclick="loadData()">Shargi datumojn</button>
+  <div id="status"></div>
   <div id="meta" class="meta"></div>
 
   <div id="leafletMap"></div>
@@ -135,17 +137,22 @@
     let labelsLayer = null;
     let systemsLayer = null;
     let maskLayer = null;
+    let dataLoadingStarted = false;
 
 
     function loadData() {
+      dataLoadingStarted = true;
+      document.getElementById('loadButton').style.display = 'none';
       document.getElementById('status').textContent = 'Shargante preparitajn datumojn ...';
 
       google.script.run
         .withSuccessHandler(function(data) {
+          document.getElementById('leafletMap').style.display = 'block';
           document.getElementById('status').textContent = 'Preta.';
           render(data);
         })
         .withFailureHandler(function(err) {
+          document.getElementById('loadButton').style.display = '';
           document.getElementById('status').textContent =
             'Eraro: ' + (err && err.message ? err.message : err);
         })
@@ -161,7 +168,7 @@
         ' &nbsp; <b>Fonto:</b> API de Open-Meteo' +
         ' &nbsp; <b>API-petoj por preparo:</b> ch. ' + data.apiRequestCount +
         ' &nbsp; <b>Punktoj entute:</b> ' + data.stats.count +
-        ' &nbsp; <b>Minimumo / mezo / maksimumo:</b> ' +
+        ' &nbsp; <b>Minimumo / mezo / maksimumo (uzighas decimala punkto):</b> ' +
         data.stats.minPressure + ' / ' +
         data.stats.meanPressure + ' / ' +
         data.stats.maxPressure + ' hPa';
@@ -813,10 +820,10 @@
     }
 
 
-    loadData();
-
     setInterval(function() {
-      loadData();
+      if (dataLoadingStarted) {
+        loadData();
+      }
     }, 15 * 60 * 1000);
   </script>
 </body>
