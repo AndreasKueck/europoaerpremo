@@ -1,7 +1,6 @@
 /******************************************************
  * Premosistemoj en Europo / Norda Atlantiko per Open-Meteo
  * ----------------------------------------------------
- * - Chiun duan horon ekigilo shargas freshajn datumojn
  * - La reteja programo montras la laste preparitajn datumojn
  * - Krado: 2,5 gradoj
  * - API en blokoj
@@ -45,23 +44,13 @@ function doGet() {
 
 /**
  * Por index.html / google.script.run.
- * La reteja programo normale liveras la laste preparitajn datumojn.
- * Se ankorau ne ekzistas datumoj, ili estas kreitaj unufoje tuj.
  */
 function getPressureMapData() {
-  const stored = loadStoredPressureMapData_();
-
-  if (stored) {
-    stored.servedFromPreparedStore = true;
-    return stored;
-  }
-
   return updatePressureMapData();
 }
 
-
 /**
- * Funkcio por la tempo-trigger.
+ * Funkcio por la tempo-ekigilo.
  * Shargas freshajn datumojn, analizas ilin kaj konservas la rezulton.
  */
 function updatePressureMapData() {
@@ -80,45 +69,6 @@ function updatePressureMapData() {
   } finally {
     lock.releaseLock();
   }
-}
-
-
-/**
- * Unufoje mane lanchebla funkcio.
- * Ghi forigas eventualajn malnovajn samfunkciajn triggerojn,
- * kreas novan triggeron por chiu 2 horoj kaj tuj preparas datumojn.
- */
-function installTwoHourlyPressureTrigger() {
-  deletePressureUpdateTriggers_();
-
-  ScriptApp.newTrigger('updatePressureMapData')
-    .timeBased()
-    .everyHours(2)
-    .create();
-
-  updatePressureMapData();
-}
-
-
-/**
- * Opcie mane lanchebla funkcio por forigi la aktualigan triggeron.
- */
-function deleteTwoHourlyPressureTrigger() {
-  deletePressureUpdateTriggers_();
-}
-
-
-/**
- * Forigas triggerojn por updatePressureMapData.
- */
-function deletePressureUpdateTriggers_() {
-  const triggers = ScriptApp.getProjectTriggers();
-
-  triggers.forEach(function(trigger) {
-    if (trigger.getHandlerFunction() === 'updatePressureMapData') {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
 }
 
 
