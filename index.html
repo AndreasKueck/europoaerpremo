@@ -100,6 +100,40 @@
     .pressure-system-label.low {
       color: #c00000;
     }
+
+    .possible-front-cross {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      width: 22px;
+      height: 22px;
+      position: relative;
+    }
+
+    .possible-front-cross::before,
+    .possible-front-cross::after {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 2px;
+      width: 3px;
+      height: 18px;
+      background: #7a1fa2;
+      border-radius: 2px;
+      box-shadow:
+        -1px -1px 0 #ffffff,
+         1px -1px 0 #ffffff,
+        -1px  1px 0 #ffffff,
+         1px  1px 0 #ffffff;
+    }
+
+    .possible-front-cross::before {
+      transform: rotate(45deg);
+    }
+
+    .possible-front-cross::after {
+      transform: rotate(-45deg);
+    }
   </style>
 </head>
 
@@ -107,9 +141,11 @@
   <h1>Europo: aerpremo</h1>
 
   <div class="hint">
-    La izobaroj estas kalkulitaj el la ekzistanta kruda 2,5-grada krado de aerpremaj valoroj che marnivelo en hPa.
+    La izobaroj estas kalkulitaj el la ekzistanta kruda 2,5-grada krado de aerpremaj valoroj che marnivelo en hPa.<br>
     Por pli glata grafika aspekto ili estas nur bilde interpolitaj en la retumilo, do ne uzighas aldonaj datumoj.
-    &quot;A&quot;: alto; &quot;M&quot;: malalto.
+    &quot;A&quot;: alto; &quot;M&quot;: malalto.<br>
+    Kruco montras lokon meze inter du najbaraj kradpunktoj, che kiuj la absoluta valoro de la gradiento de la temperaturo (alto: 2 m) estas
+    minimume po 2,5°C laulonge de 100 km kaj el kiuj almenau unu kradpunkto estas karakterizata de precipitajho.
   </div>
 
   <button id="loadButton" onclick="loadData()">Shargi datumojn</button>
@@ -137,6 +173,7 @@
     let labelsLayer = null;
     let systemsLayer = null;
     let maskLayer = null;
+    let possibleFrontPartsLayer = null;
     let dataLoadingStarted = false;
 
 
@@ -162,6 +199,10 @@
 
     function render(data) {
       const preparedAt = data.preparedAt || data.generatedAt || '';
+      const possibleFrontCount =
+        data && Array.isArray(data.possibleFrontParts)
+          ? data.possibleFrontParts.length
+          : 0;
 
       document.getElementById('meta').innerHTML =
         '<b>Datumoj preparitaj:</b> ' + escapeHtml(preparedAt) +
@@ -205,12 +246,16 @@
       leafletMap.createPane('maskPane');
       leafletMap.getPane('maskPane').style.zIndex = 470;
 
+      leafletMap.createPane('possibleFrontPartsPane');
+      leafletMap.getPane('possibleFrontPartsPane').style.zIndex = 475;
+
       leafletMap.createPane('pressureSystemsPane');
       leafletMap.getPane('pressureSystemsPane').style.zIndex = 480;
 
       isobarsLayer = L.layerGroup().addTo(leafletMap);
       labelsLayer = L.layerGroup().addTo(leafletMap);
       systemsLayer = L.layerGroup().addTo(leafletMap);
+      possibleFrontPartsLayer = L.layerGroup().addTo(leafletMap);
       maskLayer = L.layerGroup().addTo(leafletMap);
     }
 
@@ -221,6 +266,7 @@
       isobarsLayer.clearLayers();
       labelsLayer.clearLayers();
       systemsLayer.clearLayers();
+      possibleFrontPartsLayer.clearLayers();
       maskLayer.clearLayers();
 
       const domain = makeDisplayDomain();
@@ -297,7 +343,13 @@
       });
 
       addOutsideAreaMask(domain);
+      addPossibleFrontParts(data.possibleFrontParts, domain);
       addPressureSystemLabels(data.systems, domain);
+
+      const possibleFrontCount =
+        data && Array.isArray(data.possibleFrontParts)
+          ? data.possibleFrontParts.length
+          : 0;
 
       document.getElementById('mapNote').textContent =
         'Mapa ekstrakto: latitudo: ' +
@@ -311,7 +363,7 @@
         'Grafika izobara intera rastrumo: ch. ' +
         round2(isobarDomain.step) + '° ' +
         '(Faktoro ' + ISOBAR_RENDER_FACTOR + ', sen aldonaj petoj al API). ' +
-        'Desegnitaj izobaraj segmentoj: ' + totalSegments + '.';
+        'Desegnitaj izobaraj segmentoj: ' + totalSegments + '. ';
 
       setTimeout(function() {
         leafletMap.invalidateSize();
@@ -524,6 +576,70 @@
           interactive: false
         }
       ).addTo(maskLayer);
+    }
+
+
+    function addPossibleFrontParts(parts, domain) {
+      if (!Array.isArray(parts)) return;
+
+      parts.forEach(function(part) {
+        addPossibleFrontPart(part, domain);
+      });
+    }
+
+
+    function addPossibleFrontPart(part, domain) {
+      if (!part) return;
+
+      const lat = Number(part.lat);
+      const lon = Number(part.lon);
+
+      if (!isFinite(lat) || !isFinite(lon)) return;
+
+      if (
+        lat < domain.latMin ||
+        lat > domain.latMax ||
+        lon < domain.lonMin ||
+        lon > domain.lonMax
+      ) {
+        return;
+      }
+
+      const tooltip =
+        '<b>Ebla parto de fronto</b><br>' +
+        'Temperaturgradienteco: ' +
+        escapeHtml(part.gradientCPer100Km) +
+        ' °C / 100 km<br>' +
+        'Diferenco de temperaturo: ' +
+        escapeHtml(part.deltaC) +
+        ' °C<br>' +
+        'Distanco inter kradpunktoj: ' +
+        escapeHtml(part.distanceKm) +
+        ' km<br>' +
+        'Temperaturoj: ' +
+        escapeHtml(part.temperatureA) +
+        ' / ' +
+        escapeHtml(part.temperatureB) +
+        ' °C<br>' +
+        'Precipitation: ' +
+        escapeHtml(part.precipitationA) +
+        ' / ' +
+        escapeHtml(part.precipitationB);
+
+      L.marker([lat, lon], {
+        pane: 'possibleFrontPartsPane',
+        interactive: true,
+        icon: L.divIcon({
+          className: 'possible-front-cross',
+          html: '',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
+        })
+      })
+      .bindTooltip(tooltip, {
+        sticky: true
+      })
+      .addTo(possibleFrontPartsLayer);
     }
 
 
