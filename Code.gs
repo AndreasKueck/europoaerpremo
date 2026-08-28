@@ -4,7 +4,9 @@
  * - La reteja programo montras la laste preparitajn datumojn
  * - Krado: 2,5 gradoj
  * - API en blokoj
- * - Tiu chi dosiero kaj index.html estis kreita per AI
+ * - Aldone: eblaj partoj de frontoj surbaze de
+ *   temperature_2m-gradienteco kaj precipitation
+ * - Tiu chi dosiero kaj index.html estis kreita / shanghita per AI
  ******************************************************/
 
 const PRESSURE_CFG = {
@@ -22,6 +24,13 @@ const PRESSURE_CFG = {
   minSystemDistanceKm: 850,
   maxSystemsPerType: 4
 };
+
+
+const POSSIBLE_FRONT_CFG = {
+  minTemperatureGradientCPer100Km: 2.5,
+  maxMarkers: 300
+};
+
 
 const PRESSURE_STORE_CFG = {
   keyPrefix: 'PRESSURE_MAP_DATA_CHUNK_',
@@ -48,6 +57,7 @@ function doGet() {
 function getPressureMapData() {
   return updatePressureMapData();
 }
+
 
 /**
  * Funkcio por la tempo-ekigilo.
@@ -157,6 +167,7 @@ function getPressureAnalysis() {
   const grid = buildGrid_();
   const points = fetchPressureGrid_(grid.points);
   const systems = findPressureSystems_(points, grid.nRows, grid.nCols);
+  const possibleFrontParts = findPossibleFrontParts_(points, grid.nRows, grid.nCols);
   const stats = calcStats_(points);
 
   return {
@@ -174,6 +185,7 @@ function getPressureAnalysis() {
     },
     stats: stats,
     systems: systems,
+    possibleFrontParts: possibleFrontParts,
     points: points
   };
 }
@@ -214,7 +226,7 @@ function buildGrid_() {
 
 
 /**
- * Shargi premdatumojn de Open-Meteo.
+ * Shargi premdatumojn, 2-m-temperaturon kaj precipitadon de Open-Meteo.
  */
 function fetchPressureGrid_(gridPoints) {
   const chunks = [];
@@ -227,7 +239,7 @@ function fetchPressureGrid_(gridPoints) {
     const params = {
       latitude: chunk.map(p => p.lat).join(','),
       longitude: chunk.map(p => p.lon).join(','),
-      current: 'pressure_msl',
+      current: 'pressure_msl,temperature_2m,precipitation',
       timezone: 'UTC',
       cell_selection: 'nearest'
     };
@@ -265,9 +277,28 @@ function fetchPressureGrid_(gridPoints) {
       const loc = arr[i];
       const original = chunk[i];
 
-      if (!loc || !loc.current || loc.current.pressure_msl === undefined || loc.current.pressure_msl === null) {
+      if (
+        !loc ||
+        !loc.current ||
+        loc.current.pressure_msl === undefined ||
+        loc.current.pressure_msl === null
+      ) {
         continue;
       }
+
+      const pressure = Number(loc.current.pressure_msl);
+
+      const temperature2m =
+        loc.current.temperature_2m === undefined ||
+        loc.current.temperature_2m === null
+          ? null
+          : Number(loc.current.temperature_2m);
+
+      const precipitation =
+        loc.current.precipitation === undefined ||
+        loc.current.precipitation === null
+          ? null
+          : Number(loc.current.precipitation);
 
       out.push({
         id: original.id,
@@ -275,14 +306,16 @@ function fetchPressureGrid_(gridPoints) {
         col: original.col,
         lat: original.lat,
         lon: original.lon,
-        pressure: Number(loc.current.pressure_msl),
+        pressure: pressure,
+        temperature2m: isFinite(temperature2m) ? temperature2m : null,
+        precipitation: isFinite(precipitation) ? precipitation : null,
         time: loc.current.time || null
       });
     }
   }
 
   if (!out.length) {
-    throw new Error('Neniuj premdatumoj ricevitaj de Open-Meteo.');
+    throw new Error('Neniuj datumoj ricevitaj de Open-Meteo.');
   }
 
   return out;
@@ -383,6 +416,116 @@ function findPressureSystems_(points, nRows, nCols) {
     highs: selectedHighs,
     lows: selectedLows
   };
+}
+
+
+/**
+ * Trovi eblajn partojn de fronto.
+ *
+ * Kriterioj:
+ * - Nur rektaj najbaroj: oriento-okcidento kaj nordo-sudo
+ * - Temperaturgradienteco >= 2 °C / 100 km
+ * - Precipitado en almenau unu el la du najbaraj punktoj:
+ *   precipitation > 0
+ *
+ * La markilo estas metata en la mezo inter la du punktoj.
+ */
+function findPossibleFrontParts_(points, nRows, nCols) {
+  const matrix = [];
+
+  for (let r = 0; r < nRows; r++) {
+    matrix.push(new Array(nCols).fill(null));
+  }
+
+  points.forEach(function(p) {
+    matrix[p.row][p.col] = p;
+  });
+
+  const out = [];
+
+  const directions = [
+    {
+      dr: 0,
+      dc: 1,
+      name: 'okcidento-oriento'
+    },
+    {
+      dr: 1,
+      dc: 0,
+      name: 'nordo-sudo'
+    }
+  ];
+
+  points.forEach(function(p) {
+    directions.forEach(function(d) {
+      const rr = p.row + d.dr;
+      const cc = p.col + d.dc;
+
+      if (rr < 0 || rr >= nRows || cc < 0 || cc >= nCols) return;
+
+      const q = matrix[rr][cc];
+      if (!q) return;
+
+      const tA = Number(p.temperature2m);
+      const tB = Number(q.temperature2m);
+
+      if (!isFinite(tA) || !isFinite(tB)) return;
+
+      const prA = Number(p.precipitation);
+      const prB = Number(q.precipitation);
+
+      const precipA = isFinite(prA) ? prA : 0;
+      const precipB = isFinite(prB) ? prB : 0;
+
+      const hasPrecipitation = precipA > 0 || precipB > 0;
+
+      if (!hasPrecipitation) return;
+
+      const distanceKm = haversineKm_(p.lat, p.lon, q.lat, q.lon);
+
+      if (!isFinite(distanceKm) || distanceKm <= 0) return;
+
+      const deltaC = Math.abs(tA - tB);
+      const gradientCPer100Km = deltaC / distanceKm * 100;
+
+      if (gradientCPer100Km < POSSIBLE_FRONT_CFG.minTemperatureGradientCPer100Km) {
+        return;
+      }
+
+      out.push({
+        type: 'possibleFrontPart',
+        label: 'Ebla parto de fronto',
+        lat: roundCoord_((p.lat + q.lat) / 2),
+        lon: roundCoord_((p.lon + q.lon) / 2),
+        gradientCPer100Km: round1_(gradientCPer100Km),
+        deltaC: round1_(deltaC),
+        distanceKm: round1_(distanceKm),
+        temperatureA: round1_(tA),
+        temperatureB: round1_(tB),
+        precipitationA: round1_(precipA),
+        precipitationB: round1_(precipB),
+        pointA: {
+          lat: roundCoord_(p.lat),
+          lon: roundCoord_(p.lon)
+        },
+        pointB: {
+          lat: roundCoord_(q.lat),
+          lon: roundCoord_(q.lon)
+        },
+        direction: d.name
+      });
+    });
+  });
+
+  out.sort(function(a, b) {
+    if (b.gradientCPer100Km !== a.gradientCPer100Km) {
+      return b.gradientCPer100Km - a.gradientCPer100Km;
+    }
+
+    return b.deltaC - a.deltaC;
+  });
+
+  return out.slice(0, POSSIBLE_FRONT_CFG.maxMarkers);
 }
 
 
