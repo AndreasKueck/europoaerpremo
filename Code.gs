@@ -32,6 +32,13 @@ const POSSIBLE_FRONT_CFG = {
 };
 
 
+const GRID_POINT_MARKER_CFG = {
+  precipitationThreshold: 0.1,
+  warmTemperatureThresholdC: 25,
+  coldTemperatureThresholdC: 0
+};
+
+
 const PRESSURE_STORE_CFG = {
   keyPrefix: 'PRESSURE_MAP_DATA_CHUNK_',
   chunkCountKey: 'PRESSURE_MAP_DATA_CHUNK_COUNT',
@@ -166,9 +173,20 @@ function deleteStoredPressureMapData_() {
 function getPressureAnalysis() {
   const grid = buildGrid_();
   const points = fetchPressureGrid_(grid.points);
+
+  const markerDataTime =
+    getRepresentativeDataTime_(points) ||
+    new Date().toISOString();
+
+  const temperatureMarkerRule =
+    makeTemperatureMarkerRule_(markerDataTime);
+
+  annotateGridPointMarkers_(points, temperatureMarkerRule);
+
   const systems = findPressureSystems_(points, grid.nRows, grid.nCols);
   const possibleFrontParts = findPossibleFrontParts_(points, grid.nRows, grid.nCols);
   const stats = calcStats_(points);
+  const markerStats = calcGridPointMarkerStats_(points);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -186,6 +204,17 @@ function getPressureAnalysis() {
     stats: stats,
     systems: systems,
     possibleFrontParts: possibleFrontParts,
+    gridPointMarkers: {
+      dataTime: markerDataTime,
+      precipitation: {
+        enabled: true,
+        operator: '>=',
+        threshold: GRID_POINT_MARKER_CFG.precipitationThreshold,
+        unit: 'mm'
+      },
+      temperature: temperatureMarkerRule,
+      stats: markerStats
+    },
     points: points
   };
 }
@@ -319,6 +348,127 @@ function fetchPressureGrid_(gridPoints) {
   }
 
   return out;
+}
+
+
+/**
+ * Aldonas al kradpunktoj flagojn por la novaj markiloj.
+ *
+ * Precipitado:
+ * - precipitation > 0
+ *
+ * Temperaturo:
+ * - 1-a de aprilo ghis 30-a de septembro: temperature_2m >= 25 °C
+ * - 1-a de oktobro ghis 31-a de marto: temperature_2m <= 0 °C
+ */
+function annotateGridPointMarkers_(points, temperatureMarkerRule) {
+  points.forEach(function(p) {
+    const precipitation = Number(p.precipitation);
+    const temperature2m = Number(p.temperature2m);
+
+    p.markerPrecipitation = hasSignificantPrecipitation_(precipitation);
+
+    if (temperatureMarkerRule && temperatureMarkerRule.season === 'warm') {
+      p.markerTemperature =
+        isFinite(temperature2m) &&
+        temperature2m >= GRID_POINT_MARKER_CFG.warmTemperatureThresholdC;
+    } else {
+      p.markerTemperature =
+        isFinite(temperature2m) &&
+        temperature2m <= GRID_POINT_MARKER_CFG.coldTemperatureThresholdC;
+    }
+  });
+}
+
+
+/**
+ * Statistikoj pri novaj kradpunktaj markiloj.
+ */
+function calcGridPointMarkerStats_(points) {
+  let precipitation = 0;
+  let temperature = 0;
+  let both = 0;
+
+  points.forEach(function(p) {
+    if (p.markerPrecipitation) precipitation++;
+    if (p.markerTemperature) temperature++;
+    if (p.markerPrecipitation && p.markerTemperature) both++;
+  });
+
+  return {
+    precipitation: precipitation,
+    temperature: temperature,
+    both: both
+  };
+}
+
+
+/**
+ * Reprezenta tempo de la ricevitaj Open-Meteo-current-datumoj.
+ */
+function getRepresentativeDataTime_(points) {
+  if (!Array.isArray(points)) return null;
+
+  for (let i = 0; i < points.length; i++) {
+    if (points[i] && points[i].time) {
+      return points[i].time;
+    }
+  }
+
+  return null;
+}
+
+
+/**
+ * Regulo por temperaturaj markiloj lau sezono.
+ */
+function makeTemperatureMarkerRule_(timeValue) {
+  const date = parseOpenMeteoTime_(timeValue) || new Date();
+  const month = date.getUTCMonth() + 1;
+
+  const warmSeason = month >= 4 && month <= 9;
+
+  if (warmSeason) {
+    return {
+      enabled: true,
+      season: 'warm',
+      seasonLabel: '1-a de aprilo ghis 30-a de septembro',
+      operator: '>=',
+      threshold: GRID_POINT_MARKER_CFG.warmTemperatureThresholdC,
+      unit: '°C',
+      variable: 'temperature_2m'
+    };
+  }
+
+  return {
+    enabled: true,
+    season: 'cold',
+    seasonLabel: '1-a de oktobro ghis 31-a de marto',
+    operator: '<=',
+    threshold: GRID_POINT_MARKER_CFG.coldTemperatureThresholdC,
+    unit: '°C',
+    variable: 'temperature_2m'
+  };
+}
+
+
+/**
+ * Open-Meteo donas UTC-tempon ofte sen fina Z.
+ */
+function parseOpenMeteoTime_(value) {
+  if (!value) return null;
+
+  let text = String(value);
+
+  if (!/[zZ]$/.test(text) && !/[+\-]\d\d:?\d\d$/.test(text)) {
+    text += 'Z';
+  }
+
+  const date = new Date(text);
+
+  if (isNaN(date.getTime())) return null;
+
+  return date;
 }
 
 
@@ -477,7 +627,10 @@ function findPossibleFrontParts_(points, nRows, nCols) {
       const precipA = isFinite(prA) ? prA : 0;
       const precipB = isFinite(prB) ? prB : 0;
 
-      const hasPrecipitation = precipA > 0 || precipB > 0;
+      const hasPrecipitationA = hasSignificantPrecipitation_(precipA);
+      const hasPrecipitationB = hasSignificantPrecipitation_(precipB);
+
+      const hasPrecipitation = hasPrecipitationA || hasPrecipitationB;
 
       if (!hasPrecipitation) return;
 
@@ -502,8 +655,11 @@ function findPossibleFrontParts_(points, nRows, nCols) {
         distanceKm: round1_(distanceKm),
         temperatureA: round1_(tA),
         temperatureB: round1_(tB),
-        precipitationA: round1_(precipA),
-        precipitationB: round1_(precipB),
+        precipitationA: round2_(precipA),
+        precipitationB: round2_(precipB),
+        hasPrecipitationA: hasPrecipitationA,
+        hasPrecipitationB: hasPrecipitationB,
+        precipitationThreshold: GRID_POINT_MARKER_CFG.precipitationThreshold,
         pointA: {
           lat: roundCoord_(p.lat),
           lon: roundCoord_(p.lon)
@@ -587,12 +743,19 @@ function calcStats_(points) {
 /**
  * Helpaj funkcioj.
  */
+
+function hasSignificantPrecipitation_(value) {
+  const n = Number(value);
+
+  return isFinite(n) &&
+    n >= GRID_POINT_MARKER_CFG.precipitationThreshold;
+}
+
 function toFormBody_(params) {
   return Object.keys(params)
     .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
     .join('&');
 }
-
 
 function roundCoord_(x) {
   return Math.round(x * 1000) / 1000;
@@ -603,6 +766,9 @@ function round1_(x) {
   return Math.round(Number(x) * 10) / 10;
 }
 
+function round2_(x) {
+  return Math.round(Number(x) * 100) / 100;
+}
 
 function isEdge_(p, nRows, nCols) {
   const r = PRESSURE_CFG.neighborhoodRadiusCells;
