@@ -29,8 +29,8 @@
     }
 
     #leafletMap {
-      height: 82vh;
-      min-height: 720px;
+      height: 720px;
+      min-height: 0;
       width: calc(100vw - 24px);
       box-sizing: border-box;
       border: 1px solid #999;
@@ -56,6 +56,43 @@
     .meta {
       margin: 8px 0 12px 0;
       font-size: 14px;
+    }
+
+    .symbol-legend {
+      margin: 6px 0 8px 0;
+      line-height: 1.6;
+    }
+
+    .legend-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #0077ff;
+      border: 2px solid #ffffff;
+      box-shadow: 0 0 0 1px #004a99;
+      vertical-align: -1px;
+      margin-right: 5px;
+    }
+
+    .legend-square {
+      display: inline-block;
+      width: 11px;
+      height: 11px;
+      border: 2px solid #ffffff;
+      box-shadow: 0 0 0 1px #884400;
+      vertical-align: -2px;
+      margin-right: 5px;
+    }
+
+    .legend-square.warm {
+      background: #ff7a00;
+      box-shadow: 0 0 0 1px #884400;
+    }
+
+    .legend-square.cold {
+      background: #00a7d7;
+      box-shadow: 0 0 0 1px #006a88;
     }
 
     .isobar-label {
@@ -99,6 +136,48 @@
 
     .pressure-system-label.low {
       color: #c00000;
+    }
+
+    .grid-point-weather-marker {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      width: 28px;
+      height: 20px;
+      position: relative;
+    }
+
+    .grid-point-weather-marker .precip-dot {
+      position: absolute;
+      left: 2px;
+      top: 5px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #0077ff;
+      border: 2px solid #ffffff;
+      box-sizing: border-box;
+      box-shadow: 0 0 0 1px #004a99;
+    }
+
+    .grid-point-weather-marker .temp-square {
+      position: absolute;
+      right: 2px;
+      top: 4px;
+      width: 11px;
+      height: 11px;
+      border: 2px solid #ffffff;
+      box-sizing: border-box;
+    }
+
+    .grid-point-weather-marker .temp-square.warm {
+      background: #ff7a00;
+      box-shadow: 0 0 0 1px #884400;
+    }
+
+    .grid-point-weather-marker .temp-square.cold {
+      background: #00a7d7;
+      box-shadow: 0 0 0 1px #006a88;
     }
 
     .possible-front-cross {
@@ -145,12 +224,13 @@
     Por pli glata grafika aspekto ili estas nur bilde interpolitaj en la retumilo, do ne uzighas aldonaj datumoj.
     &quot;A&quot;: alto; &quot;M&quot;: malalto.<br>
     Kruco montras lokon meze inter du najbaraj kradpunktoj, che kiuj la absoluta valoro de la gradiento de la temperaturo (alto: 2 m) estas
-    minimume po 2,5°C laulonge de 100 km kaj el kiuj almenau unu kradpunkto estas karakterizata de precipitajho.
+    minimume po 2,5°C en 100 km kaj el kiuj almenau unu kradpunkto estas karakterizata de precipitajho.
   </div>
 
   <button id="loadButton" onclick="loadData()">Shargi datumojn</button>
   <div id="status"></div>
   <div id="meta" class="meta"></div>
+  <div id="symbolLegend" class="hint symbol-legend"></div>
 
   <div id="leafletMap"></div>
   <div id="mapNote"></div>
@@ -174,7 +254,9 @@
     let systemsLayer = null;
     let maskLayer = null;
     let possibleFrontPartsLayer = null;
+    let weatherGridMarkersLayer = null;
     let dataLoadingStarted = false;
+    let lockedMapView = null;
 
 
     function loadData() {
@@ -214,6 +296,8 @@
         data.stats.meanPressure + ' / ' +
         data.stats.maxPressure + ' hPa';
 
+      document.getElementById('symbolLegend').innerHTML = renderSymbolLegend(data);
+
       renderLeafletMap(data);
       document.getElementById('footer').innerHTML = renderFooter();
     }
@@ -222,13 +306,21 @@
     function initLeafletMap() {
       if (leafletMap) return;
 
-      leafletMap = L.map('leafletMap', {
-        preferCanvas: false,
-        worldCopyJump: false,
-        maxBoundsViscosity: 1.0,
-        zoomSnap: 0.1,
-        zoomDelta: 0.25
-      }).setView([55, 4], 4);
+    leafletMap = L.map('leafletMap', {
+      preferCanvas: false,
+      worldCopyJump: false,
+      maxBoundsViscosity: 1.0,
+
+      zoomSnap: 0.1,
+      zoomDelta: 0.25,
+
+      zoomControl: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom: false,
+      boxZoom: false,
+      keyboard: false
+    }).setView([55, 4], 4);
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 9,
@@ -244,7 +336,11 @@
       leafletMap.getPane('isobarLabelsPane').style.zIndex = 460;
 
       leafletMap.createPane('maskPane');
-      leafletMap.getPane('maskPane').style.zIndex = 470;
+      leafletMap.getPane('maskPane').style.zIndex = 590;
+      leafletMap.getPane('maskPane').style.pointerEvents = 'none';
+
+      leafletMap.createPane('weatherGridMarkersPane');
+      leafletMap.getPane('weatherGridMarkersPane').style.zIndex = 474;
 
       leafletMap.createPane('possibleFrontPartsPane');
       leafletMap.getPane('possibleFrontPartsPane').style.zIndex = 475;
@@ -255,6 +351,7 @@
       isobarsLayer = L.layerGroup().addTo(leafletMap);
       labelsLayer = L.layerGroup().addTo(leafletMap);
       systemsLayer = L.layerGroup().addTo(leafletMap);
+      weatherGridMarkersLayer = L.layerGroup().addTo(leafletMap);
       possibleFrontPartsLayer = L.layerGroup().addTo(leafletMap);
       maskLayer = L.layerGroup().addTo(leafletMap);
     }
@@ -266,6 +363,7 @@
       isobarsLayer.clearLayers();
       labelsLayer.clearLayers();
       systemsLayer.clearLayers();
+      weatherGridMarkersLayer.clearLayers();
       possibleFrontPartsLayer.clearLayers();
       maskLayer.clearLayers();
 
@@ -277,11 +375,7 @@
       );
 
       leafletMap.setMaxBounds(bounds.pad(0.06));
-
-      leafletMap.fitBounds(bounds, {
-        padding: [0, 0],
-        animate: false
-      });
+      applyLockedMapView(bounds);
 
       const matrixResult = buildDisplayPressureMatrix(data, domain);
       const originalMatrix = matrixResult.matrix;
@@ -342,9 +436,10 @@
         addIsobarLabel(value, segments, domain);
       });
 
-      addOutsideAreaMask(domain);
+      const weatherMarkerStats = addGridPointWeatherMarkers(data, domain);
       addPossibleFrontParts(data.possibleFrontParts, domain);
       addPressureSystemLabels(data.systems, domain);
+      addOutsideAreaMask(domain);
 
       const possibleFrontCount =
         data && Array.isArray(data.possibleFrontParts)
@@ -365,13 +460,289 @@
         '(Faktoro ' + ISOBAR_RENDER_FACTOR + ', sen aldonaj petoj al API). ' +
         'Desegnitaj izobaraj segmentoj: ' + totalSegments + '. ';
 
-      setTimeout(function() {
-        leafletMap.invalidateSize();
-        leafletMap.fitBounds(bounds, {
-          padding: [0, 0],
-          animate: false
-        });
-      }, 0);
+        setTimeout(function() {
+          leafletMap.invalidateSize();
+          applyLockedMapView(bounds);
+        }, 0);
+    }
+
+function applyLockedMapView(bounds) {
+  if (!leafletMap) return;
+
+  leafletMap.invalidateSize(false);
+
+  if (!lockedMapView) {
+    leafletMap.fitBounds(bounds, {
+      padding: [0, 0],
+      animate: false
+    });
+
+    lockedMapView = {
+      center: leafletMap.getCenter(),
+      zoom: leafletMap.getZoom()
+    };
+
+    leafletMap.setMinZoom(lockedMapView.zoom);
+    leafletMap.setMaxZoom(lockedMapView.zoom);
+  } else {
+    leafletMap.setMinZoom(lockedMapView.zoom);
+    leafletMap.setMaxZoom(lockedMapView.zoom);
+
+    leafletMap.setView(
+      lockedMapView.center,
+      lockedMapView.zoom,
+      {
+        animate: false
+      }
+    );
+  }
+}
+
+function renderSymbolLegend(data) {
+  const precipRule = getPrecipitationMarkerRule(data);
+  const tempRule = getTemperatureMarkerRule(data);
+  const dataTime =
+    data &&
+    data.gridPointMarkers &&
+    data.gridPointMarkers.dataTime
+      ? data.gridPointMarkers.dataTime
+      : findRepresentativePointTime(data && data.points);
+
+  let tempText = '';
+
+  if (tempRule.season === 'warm') {
+    tempText =
+      '<span class="legend-square warm"></span>' +
+      'Kvadrato: kradpunkto kun 2-m-temperaturo &ge; ' +
+      escapeHtml(tempRule.threshold) +
+      '°C; aplikebla por la sezono de la 1a de Aprilo ghis 30a de Septembro.';
+  } else {
+    tempText =
+      '<span class="legend-square cold"></span>' +
+      'Kvadrato: kradpunkto kun 2-m-temperaturo &le; ' +
+      escapeHtml(tempRule.threshold) +
+      '°C; aplikebla por la sezono de la 1a de Oktobro ghis 31a de Marto.';
+  }
+
+  return '<span class="legend-dot"></span>' +
+    'Punkto: kradpunkto kun precipitajho &ge; ' +
+    escapeHtml(precipRule.threshold) +
+    ' ' +
+    escapeHtml(precipRule.unit || 'mm') + '. ' +
+    tempText +
+    '<br>' + 'Noto: Tiuj chi du simboloj povas marki nur kradpunktan lokon. Pri aliaj lokoj nenia informo pri eventuala precipitajho kaj temperaturo estas donata. Tie do povas ekzemple pluvi sen tio, ke la mapo indikas tion.' + '<br>' +
+    (dataTime ? '<br>Tempo por sezona elekto: ' + escapeHtml(dataTime) + 'Z.' : '');
+}
+
+
+function addGridPointWeatherMarkers(data, domain) {
+  const stats = {
+    precipitation: 0,
+    temperature: 0,
+    both: 0
+  };
+
+  if (!data || !Array.isArray(data.points)) return stats;
+
+  const precipRule = getPrecipitationMarkerRule(data);
+  const tempRule = getTemperatureMarkerRule(data);
+
+  data.points.forEach(function(p) {
+    addGridPointWeatherMarker(p, domain, precipRule, tempRule, stats);
+  });
+
+  return stats;
+}
+
+
+    function addGridPointWeatherMarker(p, domain, precipRule, tempRule, stats) {
+      if (!p) return;
+
+      const lat = Number(p.lat);
+      const lon = Number(p.lon);
+
+      if (!isFinite(lat) || !isFinite(lon)) return;
+
+      if (
+        lat < domain.latMin ||
+        lat > domain.latMax ||
+        lon < domain.lonMin ||
+        lon > domain.lonMax
+      ) {
+        return;
+      }
+
+      const precipitationValue = Number(p.precipitation);
+      const temperatureValue = Number(p.temperature2m);
+
+      const precipitationThreshold = Number(precipRule.threshold);
+
+      const hasPrecipitation =
+        p.markerPrecipitation === true ||
+        (
+        p.markerPrecipitation !== false &&
+        isFinite(precipitationValue) &&
+        precipitationValue >= precipitationThreshold
+      );
+
+      let hasTemperature = p.markerTemperature === true;
+
+      if (p.markerTemperature !== true && p.markerTemperature !== false) {
+        if (tempRule.season === 'warm') {
+          hasTemperature =
+            isFinite(temperatureValue) &&
+            temperatureValue >= Number(tempRule.threshold);
+        } else {
+          hasTemperature =
+            isFinite(temperatureValue) &&
+            temperatureValue <= Number(tempRule.threshold);
+        }
+      }
+
+      if (!hasPrecipitation && !hasTemperature) return;
+
+      if (hasPrecipitation) stats.precipitation++;
+      if (hasTemperature) stats.temperature++;
+      if (hasPrecipitation && hasTemperature) stats.both++;
+
+      const html =
+        (hasPrecipitation ? '<span class="precip-dot"></span>' : '') +
+        (hasTemperature ? '<span class="temp-square ' + escapeHtml(tempRule.season) + '"></span>' : '');
+
+      const tempCriterion =
+        tempRule.season === 'warm'
+          ? '2-m-temperaturo >= ' + tempRule.threshold + ' °C'
+          : '2-m-temperaturo <= ' + tempRule.threshold + ' °C';
+
+      let tooltip =
+        '<b>Kradpunkto</b><br>' +
+        'Lat / lon: ' + escapeHtml(lat) + ' / ' + escapeHtml(lon) + '<br>' +
+        'Precipitajho: ' +
+        (isFinite(precipitationValue) ? escapeHtml(formatPrecipitation(precipitationValue)) + ' mm' : 'n/a') +
+        '<br>' +
+        '2-m-temperaturo: ' +
+        (isFinite(temperatureValue) ? escapeHtml(round1(temperatureValue)) + ' °C' : 'n/a') +
+        '<br>' +
+        'Tempo: ' + escapeHtml(p.time || '') +
+        '<br>';
+
+      if (hasPrecipitation) {
+        tooltip += '<br><span style="color:#0077ff;"><b>Punkto:</b></span> precipitation ' +
+        escapeHtml(precipRule.operator) +
+        ' ' +
+        escapeHtml(precipRule.threshold) +
+        ' ' +
+        escapeHtml(precipRule.unit || 'mm');
+      }
+
+      if (hasTemperature) {
+        tooltip += '<br><span style="color:' +
+          (tempRule.season === 'warm' ? '#ff7a00' : '#00a7d7') +
+          ';"><b>Kvadrato:</b></span> ' +
+          escapeHtml(tempCriterion);
+      }
+
+      L.marker([lat, lon], {
+        pane: 'weatherGridMarkersPane',
+        interactive: true,
+        icon: L.divIcon({
+          className: 'grid-point-weather-marker',
+          html: html,
+          iconSize: [28, 20],
+          iconAnchor: [14, 10]
+        })
+      })
+      .bindTooltip(tooltip, {
+        sticky: true
+      })
+      .addTo(weatherGridMarkersLayer);
+    }
+
+function getPrecipitationMarkerRule(data) {
+  if (
+    data &&
+    data.gridPointMarkers &&
+    data.gridPointMarkers.precipitation
+  ) {
+    return data.gridPointMarkers.precipitation;
+  }
+
+  return {
+    enabled: true,
+    operator: '>=',
+    threshold: 0.1,
+    unit: 'mm'
+  };
+}
+
+    function getTemperatureMarkerRule(data) {
+      if (
+        data &&
+        data.gridPointMarkers &&
+        data.gridPointMarkers.temperature
+      ) {
+        return data.gridPointMarkers.temperature;
+      }
+
+      const timeValue = findRepresentativePointTime(data && data.points);
+      return makeClientTemperatureMarkerRule(timeValue);
+    }
+
+
+    function makeClientTemperatureMarkerRule(timeValue) {
+      const date = parseClientDataTime(timeValue) || new Date();
+      const month = date.getUTCMonth() + 1;
+      const warmSeason = month >= 4 && month <= 9;
+
+      if (warmSeason) {
+        return {
+          enabled: true,
+          season: 'warm',
+          operator: '>=',
+          threshold: 25,
+          unit: '°C',
+          variable: 'temperature_2m'
+        };
+      }
+
+      return {
+        enabled: true,
+        season: 'cold',
+        operator: '<=',
+        threshold: 0,
+        unit: '°C',
+        variable: 'temperature_2m'
+      };
+    }
+
+
+    function findRepresentativePointTime(points) {
+      if (!Array.isArray(points)) return '';
+
+      for (let i = 0; i < points.length; i++) {
+        if (points[i] && points[i].time) {
+          return points[i].time;
+        }
+      }
+
+      return '';
+    }
+
+
+    function parseClientDataTime(value) {
+      if (!value) return null;
+
+      let text = String(value);
+
+      if (!/[zZ]$/.test(text) && !/[+\-]\d\d:?\d\d$/.test(text)) {
+        text += 'Z';
+      }
+
+      const date = new Date(text);
+
+      if (isNaN(date.getTime())) return null;
+
+      return date;
     }
 
 
@@ -604,6 +975,27 @@
       ) {
         return;
       }
+      
+      const frontPrecipitationThreshold =
+      isFinite(Number(part.precipitationThreshold))
+      ? Number(part.precipitationThreshold)
+      : 0.1;
+
+      const frontHasPrecipitationA =
+      part.hasPrecipitationA === true ||
+      (
+      part.hasPrecipitationA !== false &&
+     isFinite(Number(part.precipitationA)) &&
+     Number(part.precipitationA) >= frontPrecipitationThreshold
+      );
+
+const frontHasPrecipitationB =
+  part.hasPrecipitationB === true ||
+  (
+    part.hasPrecipitationB !== false &&
+    isFinite(Number(part.precipitationB)) &&
+    Number(part.precipitationB) >= frontPrecipitationThreshold
+  );
 
       const tooltip =
         '<b>Ebla parto de fronto</b><br>' +
@@ -622,9 +1014,17 @@
         escapeHtml(part.temperatureB) +
         ' °C<br>' +
         'Precipitation: ' +
-        escapeHtml(part.precipitationA) +
-        ' / ' +
-        escapeHtml(part.precipitationB);
+escapeHtml(formatPrecipitation(part.precipitationA)) +
+' / ' +
+escapeHtml(formatPrecipitation(part.precipitationB)) +
+' mm<br>' +
+'Precipitation-kriterio: >= ' +
+escapeHtml(frontPrecipitationThreshold) +
+' mm<br>' +
+'Kriterio plenumita che punkto A / B: ' +
+escapeHtml(frontHasPrecipitationA ? 'jes' : 'ne') +
+' / ' +
+escapeHtml(frontHasPrecipitationB ? 'jes' : 'ne');
 
       L.marker([lat, lon], {
         pane: 'possibleFrontPartsPane',
@@ -909,12 +1309,20 @@
       return '<p class="hint">' +
         'Jen tiu chi ret-apo, kiel Android-apo &quot;<a href="https://www.dropbox.com/scl/fi/a4olirho6pgw73wqgbox0/Europo___aerpremo_v1.0.0_1787832826684.apk?rlkey=3hmyys72k3jixjyeqxvp3nj73&st=kp9ja639&dl=0" target="_blank">Europo &ndash; aerpremo</a>&quot;.<br>' +
         'Ghi estis kreita per AppMint disponigita de SmartrixLabs. Elshuto, instalo kaj uzo de la APK okazas je propra risko.<br>' +
+        'Jen rilata <a href="https://github.com/AndreasKueck/europoaerpremo" target="_blank">GitHub-deponejo</a>.<br>' +
         'Jen Snapchat-lensoj &quot;<a href="https://www.snapchat.com/lens/052adfc26f8f4adbb4b56fd07804b7b0" target="_blank">Europo: aerpremo</a>&quot; kaj &quot;<a href="https://www.snapchat.com/lens/6d28e196ad734258a3c553c0b0f02d36" target="_blank">Norda Maro</a>&quot;.' +
         '<br><br>' +
         '<a href="https://jhau.de/privateco.html" target="_blank">Privateco</a>' +
         '</p>';
     }
 
+function formatPrecipitation(value) {
+  const n = Number(value);
+
+  if (!isFinite(n)) return 'n/a';
+
+  return n.toFixed(2);
+}
 
     function round1(x) {
       return Math.round(Number(x) * 10) / 10;
