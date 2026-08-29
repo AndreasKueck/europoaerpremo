@@ -138,14 +138,14 @@
       color: #c00000;
     }
 
-    .grid-point-weather-marker {
-      background: transparent;
-      border: none;
-      box-shadow: none;
-      width: 28px;
-      height: 20px;
-      position: relative;
-    }
+    .leaflet-marker-icon.grid-point-weather-marker {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  width: 28px;
+  height: 20px;
+  position: absolute;
+}
 
     .grid-point-weather-marker .precip-dot {
       position: absolute;
@@ -180,14 +180,14 @@
       box-shadow: 0 0 0 1px #006a88;
     }
 
-    .possible-front-cross {
-      background: transparent;
-      border: none;
-      box-shadow: none;
-      width: 22px;
-      height: 22px;
-      position: relative;
-    }
+    .leaflet-marker-icon.possible-front-cross {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  width: 22px;
+  height: 22px;
+  position: absolute;
+}
 
     .possible-front-cross::before,
     .possible-front-cross::after {
