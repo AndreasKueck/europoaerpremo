@@ -126,7 +126,7 @@ function loadStoredPressureMapData_() {
 
   const chunkCount = Number(chunkCountRaw);
 
-  if (!isFinite(chunkCount) || chunkCount <= 0) return null;
+  if (!Number.isFinite(chunkCount) || chunkCount <= 0) return null;
 
   let json = '';
 
@@ -317,17 +317,22 @@ function fetchPressureGrid_(gridPoints) {
 
       const pressure = Number(loc.current.pressure_msl);
 
+      if (!Number.isFinite(pressure)) {
+        continue;
+      }
+
+      const rawTemperature = loc.current.temperature_2m;
+      const rawPrecipitation = loc.current.precipitation;
+
       const temperature2m =
-        loc.current.temperature_2m === undefined ||
-        loc.current.temperature_2m === null
+        rawTemperature === undefined || rawTemperature === null
           ? null
-          : Number(loc.current.temperature_2m);
+          : Number(rawTemperature);
 
       const precipitation =
-        loc.current.precipitation === undefined ||
-        loc.current.precipitation === null
+        rawPrecipitation === undefined || rawPrecipitation === null
           ? null
-          : Number(loc.current.precipitation);
+          : Number(rawPrecipitation);
 
       out.push({
         id: original.id,
@@ -336,8 +341,14 @@ function fetchPressureGrid_(gridPoints) {
         lat: original.lat,
         lon: original.lon,
         pressure: pressure,
-        temperature2m: isFinite(temperature2m) ? temperature2m : null,
-        precipitation: isFinite(precipitation) ? precipitation : null,
+        temperature2m:
+          temperature2m !== null && Number.isFinite(temperature2m)
+            ? temperature2m
+            : null,
+        precipitation:
+          precipitation !== null && Number.isFinite(precipitation)
+            ? precipitation
+            : null,
         time: loc.current.time || null
       });
     }
@@ -355,7 +366,8 @@ function fetchPressureGrid_(gridPoints) {
  * Aldonas al kradpunktoj flagojn por la novaj markiloj.
  *
  * Precipitado:
- * - precipitation > 0
+ * - precipitation >= GRID_POINT_MARKER_CFG.precipitationThreshold
+ *   Do nuntempe: precipitation >= 0.1 mm
  *
  * Temperaturo:
  * - 1-a de aprilo ghis 30-a de septembro: temperature_2m >= 25 °C
@@ -363,18 +375,25 @@ function fetchPressureGrid_(gridPoints) {
  */
 function annotateGridPointMarkers_(points, temperatureMarkerRule) {
   points.forEach(function(p) {
-    const precipitation = Number(p.precipitation);
-    const temperature2m = Number(p.temperature2m);
+    const precipitation =
+      p.precipitation === null || p.precipitation === undefined
+        ? NaN
+        : Number(p.precipitation);
+
+    const temperature2m =
+      p.temperature2m === null || p.temperature2m === undefined
+        ? NaN
+        : Number(p.temperature2m);
 
     p.markerPrecipitation = hasSignificantPrecipitation_(precipitation);
 
     if (temperatureMarkerRule && temperatureMarkerRule.season === 'warm') {
       p.markerTemperature =
-        isFinite(temperature2m) &&
+        Number.isFinite(temperature2m) &&
         temperature2m >= GRID_POINT_MARKER_CFG.warmTemperatureThresholdC;
     } else {
       p.markerTemperature =
-        isFinite(temperature2m) &&
+        Number.isFinite(temperature2m) &&
         temperature2m <= GRID_POINT_MARKER_CFG.coldTemperatureThresholdC;
     }
   });
@@ -573,10 +592,12 @@ function findPressureSystems_(points, nRows, nCols) {
  * Trovi eblajn partojn de fronto.
  *
  * Kriterioj:
- * - Nur rektaj najbaroj: oriento-okcidento kaj nordo-sudo
- * - Temperaturgradienteco >= 2 °C / 100 km
- * - Precipitado en almenau unu el la du najbaraj punktoj:
- *   precipitation > 0
+ * - Nur rektaj najbaroj: okcidento-oriento kaj nordo-sudo
+ * - Temperaturgradienteco >= POSSIBLE_FRONT_CFG.minTemperatureGradientCPer100Km
+ *   Do nuntempe: gradienteco >= 2.5 °C / 100 km
+ * - Precipitado en almenau unu el la du najbaraj kradpunktoj lau
+ *   hasSignificantPrecipitation_()
+ *   Do nuntempe: precipitation >= 0.1 mm
  *
  * La markilo estas metata en la mezo inter la du punktoj.
  */
@@ -616,16 +637,30 @@ function findPossibleFrontParts_(points, nRows, nCols) {
       const q = matrix[rr][cc];
       if (!q) return;
 
-      const tA = Number(p.temperature2m);
-      const tB = Number(q.temperature2m);
+      const tA =
+        p.temperature2m === null || p.temperature2m === undefined
+          ? NaN
+          : Number(p.temperature2m);
 
-      if (!isFinite(tA) || !isFinite(tB)) return;
+      const tB =
+        q.temperature2m === null || q.temperature2m === undefined
+          ? NaN
+          : Number(q.temperature2m);
 
-      const prA = Number(p.precipitation);
-      const prB = Number(q.precipitation);
+      if (!Number.isFinite(tA) || !Number.isFinite(tB)) return;
 
-      const precipA = isFinite(prA) ? prA : 0;
-      const precipB = isFinite(prB) ? prB : 0;
+      const prA =
+        p.precipitation === null || p.precipitation === undefined
+          ? NaN
+          : Number(p.precipitation);
+
+      const prB =
+        q.precipitation === null || q.precipitation === undefined
+          ? NaN
+          : Number(q.precipitation);
+
+      const precipA = Number.isFinite(prA) ? prA : 0;
+      const precipB = Number.isFinite(prB) ? prB : 0;
 
       const hasPrecipitationA = hasSignificantPrecipitation_(precipA);
       const hasPrecipitationB = hasSignificantPrecipitation_(precipB);
@@ -636,7 +671,7 @@ function findPossibleFrontParts_(points, nRows, nCols) {
 
       const distanceKm = haversineKm_(p.lat, p.lon, q.lat, q.lon);
 
-      if (!isFinite(distanceKm) || distanceKm <= 0) return;
+      if (!Number.isFinite(distanceKm) || distanceKm <= 0) return;
 
       const deltaC = Math.abs(tA - tB);
       const gradientCPer100Km = deltaC / distanceKm * 100;
@@ -744,18 +779,29 @@ function calcStats_(points) {
  * Helpaj funkcioj.
  */
 
+/**
+ * Unueca kriterio por precipitajho.
+ *
+ * Uzata kaj por bluaj precipitajhaj kradpunktomarkiloj
+ * kaj por la precipitajha parto de la frontkruca kriterio.
+ *
+ * Nuntempe:
+ * - precipitation >= 0.1 mm
+ */
 function hasSignificantPrecipitation_(value) {
   const n = Number(value);
 
-  return isFinite(n) &&
+  return Number.isFinite(n) &&
     n >= GRID_POINT_MARKER_CFG.precipitationThreshold;
 }
+
 
 function toFormBody_(params) {
   return Object.keys(params)
     .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
     .join('&');
 }
+
 
 function roundCoord_(x) {
   return Math.round(x * 1000) / 1000;
@@ -766,9 +812,11 @@ function round1_(x) {
   return Math.round(Number(x) * 10) / 10;
 }
 
+
 function round2_(x) {
   return Math.round(Number(x) * 100) / 100;
 }
+
 
 function isEdge_(p, nRows, nCols) {
   const r = PRESSURE_CFG.neighborhoodRadiusCells;
