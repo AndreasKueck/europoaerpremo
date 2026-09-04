@@ -25,6 +25,26 @@ const PRESSURE_CFG = {
   maxSystemsPerType: 4
 };
 
+const GERMAN_BIGHT_SUMMARY_CFG = {
+  title: 'Resumo de la meteorologia situacio decida por la vetero en Germana Golfo',
+
+  // Grobe Mitte der Deutschen Bucht.
+  focus: {
+    name: 'Germana Golfo',
+    lat: 54.2,
+    lon: 7.5
+  },
+
+  maxLows: 2,
+  maxHighs: 2,
+
+  // Normdruck zur groben Gewichtung der Relevanz.
+  pressureReferenceHpa: 1013.25,
+
+  // Distanzskala fuer Einflussgewichtung.
+  influenceDistanceScaleKm: 850
+};
+
 
 const POSSIBLE_FRONT_CFG = {
   minTemperatureGradientCPer100Km: 2.5,
@@ -184,6 +204,7 @@ function getPressureAnalysis() {
   annotateGridPointMarkers_(points, temperatureMarkerRule);
 
   const systems = findPressureSystems_(points, grid.nRows, grid.nCols);
+  const germanBightSummary = makeGermanBightWeatherSummary_(systems);
   const possibleFrontParts = findPossibleFrontParts_(points, grid.nRows, grid.nCols);
   const stats = calcStats_(points);
   const markerStats = calcGridPointMarkerStats_(points);
@@ -203,6 +224,7 @@ function getPressureAnalysis() {
     },
     stats: stats,
     systems: systems,
+    germanBightSummary: germanBightSummary,
     possibleFrontParts: possibleFrontParts,
     gridPointMarkers: {
       dataTime: markerDataTime,
@@ -778,6 +800,362 @@ function calcStats_(points) {
 /**
  * Helpaj funkcioj.
  */
+
+/**
+ * Mallonga Esperanto-stila resumo lau modelo de Shipping Forecast.
+ *
+ * Maksimume du malaltoj kaj du altoj estas elektataj.
+ * La elekto estas heuristika: forto de la centro kaj distanco al Germana Golfo.
+ */
+function makeGermanBightWeatherSummary_(systems) {
+  systems = systems || {};
+
+  const lows = selectGermanBightRelevantSystems_(
+    systems.lows || [],
+    'M',
+    GERMAN_BIGHT_SUMMARY_CFG.maxLows
+  );
+
+  const highs = selectGermanBightRelevantSystems_(
+    systems.highs || [],
+    'A',
+    GERMAN_BIGHT_SUMMARY_CFG.maxHighs
+  );
+
+  const parts = [];
+
+  lows.forEach(function(system) {
+    parts.push(formatGermanBightSummarySystem_(system, 'M'));
+  });
+
+  highs.forEach(function(system) {
+    parts.push(formatGermanBightSummarySystem_(system, 'A'));
+  });
+
+  return {
+    title: GERMAN_BIGHT_SUMMARY_CFG.title,
+    text: parts.length
+      ? parts.join(' ')
+      : 'Neniuj klaraj premcentroj determineblas por Germana Golfo',
+    focus: {
+      name: GERMAN_BIGHT_SUMMARY_CFG.focus.name,
+      lat: GERMAN_BIGHT_SUMMARY_CFG.focus.lat,
+      lon: GERMAN_BIGHT_SUMMARY_CFG.focus.lon
+    },
+    lows: lows,
+    highs: highs
+  };
+}
+
+
+/**
+ * Elektas la plej veterdeterminajn sistemojn por Germana Golfo.
+ *
+ * Poentaro:
+ * - ju pli proksime al Germana Golfo, des pli grava;
+ * - ju pli forta la premdiferenco rilate al 1013.25 hPa, des pli grava;
+ * - loka prominenceco iomete pligravigas la sistemon.
+ */
+function selectGermanBightRelevantSystems_(candidates, type, maxCount) {
+  if (!Array.isArray(candidates)) return [];
+
+  const focus = GERMAN_BIGHT_SUMMARY_CFG.focus;
+  const referencePressure = GERMAN_BIGHT_SUMMARY_CFG.pressureReferenceHpa;
+  const distanceScale = GERMAN_BIGHT_SUMMARY_CFG.influenceDistanceScaleKm;
+
+  const enriched = candidates
+    .map(function(c) {
+      if (!c) return null;
+
+      const lat = Number(c.lat);
+      const lon = Number(c.lon);
+      const pressure = Number(c.pressure);
+
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lon) ||
+        !Number.isFinite(pressure)
+      ) {
+        return null;
+      }
+
+      const distanceKm = haversineKm_(focus.lat, focus.lon, lat, lon);
+
+      if (!Number.isFinite(distanceKm)) return null;
+
+      const pressureIntensity =
+        type === 'M'
+          ? Math.max(0, referencePressure - pressure)
+          : Math.max(0, pressure - referencePressure);
+
+      const prominence =
+        c.prominence === null || c.prominence === undefined
+          ? 0
+          : Number(c.prominence);
+
+      const safeProminence = Number.isFinite(prominence) ? prominence : 0;
+
+      const distanceWeight =
+        1 / Math.pow(1 + distanceKm / distanceScale, 2);
+
+      const edgeWeight = c.edge ? 0.9 : 1.0;
+
+      const influenceScore =
+        (pressureIntensity + safeProminence * 0.8 + 2) *
+        distanceWeight *
+        edgeWeight;
+
+      const locationText = describeWeatherSystemLocation_(lat, lon);
+
+      const out = Object.assign({}, c);
+      out.distanceToGermanBightKm = round1_(distanceKm);
+      out.influenceScore = round2_(influenceScore);
+      out.locationText = locationText;
+
+      return out;
+    })
+    .filter(function(c) {
+      return !!c;
+    });
+
+  enriched.sort(function(a, b) {
+    if (b.influenceScore !== a.influenceScore) {
+      return b.influenceScore - a.influenceScore;
+    }
+
+    // Sekundara ordigo: pli proksima al Germana Golfo.
+    return a.distanceToGermanBightKm - b.distanceToGermanBightKm;
+  });
+
+  return enriched.slice(0, maxCount);
+}
+
+
+/**
+ * Formatado lau simpligita Shipping-Forecast-stilo:
+ * "Malalto Ferooj 985 Alto 400 kilometrojn okcidente de Irlando 1026"
+ */
+function formatGermanBightSummarySystem_(system, type) {
+  const word = type === 'M' ? 'Malalto' : 'Alto';
+  const pressure = Math.round(Number(system.pressure));
+
+  return word + ' ' + system.locationText + ' ' + pressure;
+}
+
+
+/**
+ * Donas mallongan lokpriskribon en Esperanto.
+ *
+ * Se sistemo estas proksima al konata regiono, uzighas ties nomo.
+ * Alie uzighas distanco kaj direkto de la plej proksima referencloko.
+ */
+function describeWeatherSystemLocation_(lat, lon) {
+  const references = getWeatherLocationReferences_();
+
+  let nearest = null;
+  let nearestDistance = Infinity;
+
+  references.forEach(function(ref) {
+    const d = haversineKm_(ref.lat, ref.lon, lat, lon);
+
+    if (Number.isFinite(d) && d < nearestDistance) {
+      nearestDistance = d;
+      nearest = ref;
+    }
+  });
+
+  if (!nearest) {
+    return roundCoord_(lat) + 'N ' + roundCoord_(lon) + 'E';
+  }
+
+  if (nearestDistance <= nearest.directKm) {
+    return nearest.name;
+  }
+
+  const roundedDistance = roundToNearest_(nearestDistance, 50);
+  const bearing = initialBearingDeg_(nearest.lat, nearest.lon, lat, lon);
+  const direction = esperantoDirectionFromBearing_(bearing);
+
+  return roundedDistance + ' kilometrojn ' + direction + ' de ' + nearest.name;
+}
+
+
+/**
+ * Referenclokoj por mallongaj marveteraj lokpriskriboj.
+ */
+function getWeatherLocationReferences_() {
+  return [
+    {
+      name: 'Germana Golfo',
+      lat: 54.2,
+      lon: 7.5,
+      directKm: 180
+    },
+    {
+      name: 'Norda Maro',
+      lat: 56.0,
+      lon: 3.0,
+      directKm: 380
+    },
+    {
+      name: 'Ferooj',
+      lat: 62.0,
+      lon: -7.0,
+      directKm: 250
+    },
+    {
+      name: 'Islando',
+      lat: 65.0,
+      lon: -19.0,
+      directKm: 450
+    },
+    {
+      name: 'Irlando',
+      lat: 53.4,
+      lon: -8.0,
+      directKm: 350
+    },
+    {
+      name: 'Skotlando',
+      lat: 56.8,
+      lon: -4.0,
+      directKm: 350
+    },
+    {
+      name: 'Anglujo',
+      lat: 52.8,
+      lon: -1.5,
+      directKm: 300
+    },
+    {
+      name: 'Manika Markolo',
+      lat: 50.3,
+      lon: -1.0,
+      directKm: 220
+    },
+    {
+      name: 'Biskaja Golfo',
+      lat: 45.5,
+      lon: -6.0,
+      directKm: 350
+    },
+    {
+      name: 'Norvegujo',
+      lat: 61.0,
+      lon: 8.0,
+      directKm: 500
+    },
+    {
+      name: 'Danujo',
+      lat: 56.0,
+      lon: 10.0,
+      directKm: 250
+    },
+    {
+      name: 'Suda Svedujo',
+      lat: 57.0,
+      lon: 14.0,
+      directKm: 260
+    },
+    {
+      name: 'Balta Maro',
+      lat: 57.0,
+      lon: 18.0,
+      directKm: 350
+    },
+    {
+      name: 'Germanujo',
+      lat: 51.0,
+      lon: 10.0,
+      directKm: 350
+    },
+    {
+      name: 'Francujo',
+      lat: 47.0,
+      lon: 2.0,
+      directKm: 450
+    },
+    {
+      name: 'Alpoj',
+      lat: 46.5,
+      lon: 10.0,
+      directKm: 300
+    },
+    {
+      name: 'Pollando',
+      lat: 52.0,
+      lon: 19.0,
+      directKm: 400
+    },
+    {
+      name: 'Hispanujo',
+      lat: 40.0,
+      lon: -3.0,
+      directKm: 500
+    }
+  ];
+}
+
+
+/**
+ * Komenca direkto de punkto A al punkto B en gradoj.
+ */
+function initialBearingDeg_(lat1, lon1, lat2, lon2) {
+  const toRad = function(d) {
+    return d * Math.PI / 180;
+  };
+
+  const toDeg = function(r) {
+    return r * 180 / Math.PI;
+  };
+
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const deltaLambda = toRad(lon2 - lon1);
+
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+
+/**
+ * Esperanto-direkto kiel adverbo:
+ * norde de, nordoriente de, okcidente de ktp.
+ */
+function esperantoDirectionFromBearing_(bearing) {
+  const b = ((Number(bearing) % 360) + 360) % 360;
+
+  const dirs = [
+    'norde',
+    'nordoriente',
+    'oriente',
+    'sudoriente',
+    'sude',
+    'sudokcidente',
+    'okcidente',
+    'nordokcidente'
+  ];
+
+  const index = Math.round(b / 45) % 8;
+
+  return dirs[index];
+}
+
+
+function roundToNearest_(value, step) {
+  const n = Number(value);
+  const s = Number(step);
+
+  if (!Number.isFinite(n) || !Number.isFinite(s) || s <= 0) {
+    return n;
+  }
+
+  return Math.round(n / s) * s;
+}
 
 /**
  * Unueca kriterio por precipitajho.
