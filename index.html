@@ -58,6 +58,29 @@
       font-size: 14px;
     }
 
+    .shipping-summary {
+      margin: 10px 0 12px 0;
+      padding: 10px 12px;
+      max-width: 1100px;
+      background: #ffffff;
+      border: 1px solid #c9d3e0;
+      border-left: 5px solid #0057c2;
+      border-radius: 6px;
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    .shipping-summary-title {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    .shipping-summary-text {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 18px;
+      letter-spacing: 0.2px;
+    }
+
     .symbol-legend {
       margin: 6px 0 8px 0;
       line-height: 1.6;
@@ -230,6 +253,7 @@
   <button id="loadButton" onclick="loadData()">Shargi datumojn</button>
   <div id="status"></div>
   <div id="meta" class="meta"></div>
+  <div id="germanBightSummary" class="shipping-summary" style="display:none;"></div>
   <div id="symbolLegend" class="hint symbol-legend"></div>
 
   <div id="leafletMap"></div>
@@ -295,6 +319,8 @@
         data.stats.minPressure + ' / ' +
         data.stats.meanPressure + ' / ' +
         data.stats.maxPressure + ' hPa';
+
+      renderGermanBightSummary(data);
 
       document.getElementById('symbolLegend').innerHTML = renderSymbolLegend(data);
 
@@ -496,6 +522,37 @@ function applyLockedMapView(bounds) {
       }
     );
   }
+}
+
+function renderGermanBightSummary(data) {
+  const el = document.getElementById('germanBightSummary');
+
+  if (!el) return;
+
+  const summary =
+    data && data.germanBightSummary
+      ? data.germanBightSummary
+      : null;
+
+  if (!summary || !summary.text) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+
+  const title =
+    summary.title ||
+    'Resumo de la meteorologia situacio decida por la vetero en Germana Golfo';
+
+  el.style.display = '';
+
+  el.innerHTML =
+    '<div class="shipping-summary-title">' +
+    escapeHtml(title) +
+    '</div>' +
+    '<div class="shipping-summary-text">' +
+    escapeHtml(summary.text) +
+    '</div>';
 }
 
 function renderSymbolLegend(data) {
